@@ -30,7 +30,15 @@ from engines.tts_engine import TTSEngine
 from ui.components.card import Card
 from ui.components.audio_player import AudioPlayer
 from ui.components.voice_pill import VoicePill, FlowWidget
+from ui.components.slider_badge import EditableSliderBadge
 from ui.styles import PRIMARY_BUTTON_STYLE, SECONDARY_BUTTON_STYLE
+
+
+class NoWheelSlider(QSlider):
+    """QSlider that ignores mouse wheel events to prevent accidental value changes during page scrolling."""
+
+    def wheelEvent(self, event) -> None:
+        event.ignore()
 
 
 class TTSView(QWidget):
@@ -145,7 +153,7 @@ class TTSView(QWidget):
         speed_title.setStyleSheet("font-weight: 600; color: #334155; font-size: 13px;")
         speed_layout.addWidget(speed_title)
 
-        self.speed_slider = QSlider(Qt.Orientation.Horizontal)
+        self.speed_slider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.speed_slider.setRange(50, 200)   # 0.5x to 2.0x
         self.speed_slider.setValue(100)        # default 1.0x
         self.speed_slider.setSingleStep(5)
@@ -154,20 +162,13 @@ class TTSView(QWidget):
         self.speed_slider.valueChanged.connect(self._on_speed_slider_changed)
         speed_layout.addWidget(self.speed_slider, 1)
 
-        self.speed_val_badge = QLabel("1.0x")
-        self.speed_val_badge.setStyleSheet("""
-            QLabel {
-                background-color: #EEF2FF;
-                color: #4F46E5;
-                font-weight: bold;
-                font-size: 13px;
-                padding: 3px 8px;
-                border-radius: 6px;
-                border: 1px solid #C7D2FE;
-                min-width: 36px;
-            }
-        """)
-        self.speed_val_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.speed_val_badge = EditableSliderBadge(
+            self.speed_slider,
+            suffix="x",
+            scale=100.0,
+            decimals=1,
+        )
+        self.speed_val_badge.setFixedWidth(54)
         speed_layout.addWidget(self.speed_val_badge)
 
         self.btn_reset_speed = QPushButton("↻")
@@ -277,11 +278,10 @@ class TTSView(QWidget):
             self.clone_pill.setVisible(False)
             self.pills_widget.setVisible(False)
             self.speed_container.setVisible(False)
-            self.voice_info_label.setText(f"⚠️ Mô hình '{self.engine.current_model_type}' chưa được tải về. Vui lòng nhấn 'Tải Model' để bắt đầu.")
-            # 2. Change text on button to "Tải Model"
-            self.btn_synthesize.setText("Tải Model")
+            self.voice_info_label.setText(f"⚠️ Mô hình '{self.engine.current_model_type}' chưa được tải về máy. Vui lòng vào '⚙ Cài đặt' để tải mô hình.")
+            self.btn_synthesize.setText("Tạo giọng nói")
             self.btn_synthesize.setEnabled(True)
-            self.status_msg_label.setText("Mô hình chưa sẵn sàng. Cần tải model trước khi tạo âm thanh.")
+            self.status_msg_label.setText("Mô hình chưa sẵn sàng. Vui lòng vào '⚙ Cài đặt' để tải và khởi tạo mô hình.")
         else:
             # Model is downloaded:
             self.pills_widget.setVisible(True)
@@ -310,6 +310,13 @@ class TTSView(QWidget):
             self.btn_synthesize.setText("Tạo giọng nói")
             self.btn_synthesize.setEnabled(True)
             self.status_msg_label.setText("Sẵn sàng tạo âm thanh.")
+
+        # Ensure progress bar animation is stopped and hidden if idle, and inputs are enabled
+        if self.worker is None or not self.worker.isRunning():
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
+            self.progress_bar.setVisible(False)
+            self._set_inputs_enabled(True)
 
     def _on_speed_slider_changed(self, value: int) -> None:
         """Handle speed slider value change (50 -> 0.5x, 100 -> 1.0x, 200 -> 2.0x)."""
@@ -399,9 +406,15 @@ class TTSView(QWidget):
     def _on_progress(self, percent: int, message: str) -> None:
         """Handle progress updates from background worker."""
         if 0 < percent < 100:
+            self.progress_bar.setVisible(True)
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(percent)
+        elif percent >= 100:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(100)
+            self.progress_bar.setVisible(False)
         else:
+            self.progress_bar.setVisible(True)
             self.progress_bar.setRange(0, 0)
 
         self.status_msg_label.setText(message)
@@ -419,50 +432,21 @@ class TTSView(QWidget):
             self.worker = None
 
     def _on_action_clicked(self) -> None:
-        """Handle main button click: download model if missing, otherwise start synthesis."""
+        """Handle main button click: warn if model missing, otherwise start synthesis."""
         if self.worker is not None and self.worker.isRunning():
             return
 
         if not self.engine.is_model_downloaded():
-            self._start_model_download()
+            # QMessageBox.warning(
+            #     self,
+            #     "Chưa có mô hình",
+            #     f"Mô hình '{self.engine.current_model_type}' chưa được tải về máy trong thư mục models.\n\n"
+            #     "Vui lòng chuyển sang mục '⚙ Cài đặt' ở thanh điều hướng để tải và khởi tạo mô hình.",
+            # )
+            self.status_msg_label.setText("⚠️ Chưa có mô hình. Vui lòng vào '⚙ Cài đặt' để tải mô hình.")
             return
 
         self._start_synthesis()
-
-    def _start_model_download(self) -> None:
-        """Download model weights asynchronously into models/ directory."""
-        self.btn_synthesize.setEnabled(False)
-        self.btn_synthesize.setText("Đang tải model...")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)
-        self.status_msg_label.setText(f"Đang tải model {self.engine.current_model_type}...")
-
-        self._cleanup_worker()
-        self.worker = WorkerThread(self.engine.ensure_model_downloaded)
-        self.worker.progress.connect(self._on_progress)
-        self.worker.finished_task.connect(self._on_model_download_success)
-        self.worker.failed_task.connect(self._on_model_download_failed)
-        self.worker.start()
-
-    def _on_model_download_success(self, _=None) -> None:
-        """Automatically load and display default supported voices when model download finishes."""
-        self.progress_bar.setVisible(False)
-        self._cleanup_worker()
-        self.refresh_state()
-        self.status_msg_label.setText("✓ Đã tải xong mô hình. Sẵn sàng tạo âm thanh.")
-        # QMessageBox.information(
-        #     self,
-        #     "Tải mô hình thành công",
-        #     f"Mô hình '{self.engine.current_model_type}' đã được tải về thành công!"
-        # )
-
-    def _on_model_download_failed(self, error_msg: str) -> None:
-        self.btn_synthesize.setEnabled(True)
-        self.btn_synthesize.setText("Tải Model")
-        self.progress_bar.setVisible(False)
-        self._cleanup_worker()
-        self.status_msg_label.setText(f"❌ Lỗi tải mô hình: {error_msg}")
-        # QMessageBox.critical(self, "Lỗi tải model", f"Đã xảy ra lỗi khi tải mô hình:\n{error_msg}")
 
     def _start_synthesis(self) -> None:
         if self.worker is not None and self.worker.isRunning():
@@ -470,7 +454,6 @@ class TTSView(QWidget):
 
         text = self.text_input.toPlainText().strip()
         if not text:
-            # QMessageBox.warning(self, "Thông báo", "Vui lòng nhập văn bản cần đọc.")
             self.status_msg_label.setText("❌ Vui lòng nhập văn bản trước khi tạo giọng nói.")
             return
 
@@ -485,11 +468,23 @@ class TTSView(QWidget):
 
         self._run_synthesis_inference(text, voice_ref)
 
+    def _set_inputs_enabled(self, enabled: bool) -> None:
+        """Enable or disable input parameters (text editing, voice selection, speed adjustment) during synthesis."""
+        self.text_input.setEnabled(enabled)
+        self.pills_widget.setEnabled(enabled)
+        self.clone_pill.setEnabled(enabled)
+        self.speed_container.setEnabled(enabled)
+        self.speed_slider.setEnabled(enabled)
+        self.speed_val_badge.setEnabled(enabled)
+        self.btn_reset_speed.setEnabled(enabled)
+
     def _run_synthesis_inference(self, text: str, voice_ref: str) -> None:
+        self.btn_synthesize.setEnabled(False)
+        self._set_inputs_enabled(False)
         self.btn_synthesize.setText("Đang xử lý giọng nói...")
         self.status_msg_label.setText("Đang xử lý tạo giọng nói...")
-        self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(True)
 
         # Run inference asynchronously via QThread Worker
         self._cleanup_worker()
@@ -507,7 +502,10 @@ class TTSView(QWidget):
 
     def _on_synthesis_finished(self, result: Dict[str, Any]) -> None:
         self.btn_synthesize.setEnabled(True)
+        self._set_inputs_enabled(True)
         self.btn_synthesize.setText("Tạo giọng nói")
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)
         self._cleanup_worker()
 
@@ -526,8 +524,10 @@ class TTSView(QWidget):
 
     def _on_synthesis_failed(self, error_msg: str) -> None:
         self.btn_synthesize.setEnabled(True)
-        self.btn_synthesize.setText("Tạo giọng nói" if self.engine.is_model_downloaded() else "Tải Model")
+        self._set_inputs_enabled(True)
+        self.btn_synthesize.setText("Tạo giọng nói")
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)
         self._cleanup_worker()
         self.status_msg_label.setText(f"❌ Lỗi: {error_msg}")
-        # QMessageBox.critical(self, "Lỗi tạo giọng nói", f"Đã xảy ra lỗi trong quá trình xử lý:\n{error_msg}")

@@ -1,3 +1,4 @@
+import contextlib
 import os
 import sys
 import logging
@@ -9,9 +10,29 @@ from core.config import (
     OMNIVOICE_DIR,
     MODEL_VIENEU,
     MODEL_OMNIVOICE,
+    ASSETS_DIR,
 )
 
 logger = logging.getLogger(__name__)
+
+SKETCH_REPO = "skytnt/anime-seg"
+
+
+@contextlib.contextmanager
+def _temp_online_env():
+    """Temporarily allow outgoing HuggingFace traffic during model downloads."""
+    keys = ["HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE"]
+    saved = {k: os.environ.get(k) for k in keys}
+    try:
+        for k in keys:
+            os.environ[k] = "0"
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
+            else:
+                os.environ.pop(k, None)
 
 # Hugging Face Repositories
 VIENEU_REPO = "pnnbao-ump/VieNeu-TTS-v3-Turbo"
@@ -54,6 +75,7 @@ class ModelManager:
         self.codec_dir = self.models_dir / "codec"
         self.whisper_dir = self.models_dir / "whisper-large-v3-turbo"
         self.omnivoice_dir = self.models_dir / "omnivoice"
+        self.sketch_dir = self.models_dir / "v181d"
 
         # Ensure directories exist
         self.models_dir.mkdir(parents=True, exist_ok=True)
@@ -62,6 +84,7 @@ class ModelManager:
         self.codec_dir.mkdir(parents=True, exist_ok=True)
         self.whisper_dir.mkdir(parents=True, exist_ok=True)
         self.omnivoice_dir.mkdir(parents=True, exist_ok=True)
+        self.sketch_dir.mkdir(parents=True, exist_ok=True)
 
     def _clean_stale_locks(self) -> None:
         """Purge orphaned .lock and .incomplete download cache files to prevent hangs."""
@@ -135,27 +158,28 @@ class ModelManager:
         from huggingface_hub import hf_hub_download
 
         total = len(missing)
-        for idx, (repo, fn, subfolder, dest) in enumerate(missing, start=1):
-            percent = int(((idx - 1) / total) * 100)
-            msg = f"Đang tải {fn} ({idx}/{total})..."
-            logger.info(msg)
-            if progress_callback:
-                progress_callback(percent, msg)
+        with _temp_online_env():
+            for idx, (repo, fn, subfolder, dest) in enumerate(missing, start=1):
+                percent = int(((idx - 1) / total) * 100)
+                msg = f"Đang tải {fn} ({idx}/{total})..."
+                logger.info(msg)
+                if progress_callback:
+                    progress_callback(percent, msg)
 
-            try:
-                hf_hub_download(
-                    repo_id=repo,
-                    filename=fn,
-                    subfolder=subfolder,
-                    local_dir=str(dest),
-                    etag_timeout=15,
-                )
-            except Exception as e:
-                # If optional helper fails (like denoiser on connection drop), log warning
-                if fn in ["denoiser.onnx", "codec_browser_onnx_meta.json"]:
-                    logger.warning(f"Bỏ qua tệp tùy chọn {fn}: {e}")
-                    continue
-                raise RuntimeError(f"Lỗi tải tệp mô hình {fn}: {e}") from e
+                try:
+                    hf_hub_download(
+                        repo_id=repo,
+                        filename=fn,
+                        subfolder=subfolder,
+                        local_dir=str(dest),
+                        etag_timeout=15,
+                    )
+                except Exception as e:
+                    # If optional helper fails (like denoiser on connection drop), log warning
+                    if fn in ["denoiser.onnx", "codec_browser_onnx_meta.json"]:
+                        logger.warning(f"Bỏ qua tệp tùy chọn {fn}: {e}")
+                        continue
+                    raise RuntimeError(f"Lỗi tải tệp mô hình {fn}: {e}") from e
 
         if progress_callback:
             progress_callback(100, "Đã tải xong toàn bộ mô hình VieNeu!")
@@ -173,15 +197,16 @@ class ModelManager:
 
         self._clean_stale_locks()
         if progress_callback:
-            progress_callback(10, "Đang tải mô hình...")
+            progress_callback(10, "Đang tải mô hình OmniVoice...")
 
         from huggingface_hub import snapshot_download
         try:
-            snapshot_download(
-                repo_id=OMNIVOICE_REPO,
-                local_dir=str(self.omnivoice_dir),
-                etag_timeout=30,
-            )
+            with _temp_online_env():
+                snapshot_download(
+                    repo_id=OMNIVOICE_REPO,
+                    local_dir=str(self.omnivoice_dir),
+                    etag_timeout=30,
+                )
         except Exception as e:
             raise RuntimeError(f"Lỗi tải mô hình OmniVoice: {e}") from e
 
@@ -210,16 +235,52 @@ class ModelManager:
         if self.is_whisper_downloaded():
             return True
 
+        self._clean_stale_locks()
         if progress_callback:
-            progress_callback(10, "Đang tải mô hình...")
+            progress_callback(10, "Đang tải mô hình Whisper...")
 
         from faster_whisper.utils import download_model
-        download_model(
-            "large-v3-turbo",
-            output_dir=str(self.whisper_dir),
-        )
+        with _temp_online_env():
+            download_model(
+                "large-v3-turbo",
+                output_dir=str(self.whisper_dir),
+            )
+
+        if self.is_whisper_downloaded():
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            os.environ["HF_DATASETS_OFFLINE"] = "1"
 
         if progress_callback:
-            progress_callback(100, "Đã tải xong mô hình.")
+            progress_callback(100, "Đã tải xong mô hình Whisper.")
         return True
 
+    def is_sketch_downloaded(self) -> bool:
+        """Check if SkyTNT Anime-Seg model checkpoint exists locally."""
+        if (self.sketch_dir / "model.safetensors").is_file():
+            return True
+        if (ASSETS_DIR / "v181d" / "model.safetensors").is_file():
+            return True
+        return False
+
+    def ensure_sketch_model(self, progress_callback: Optional[Callable[[int, str], None]] = None) -> bool:
+        """Download SkyTNT Anime-Seg model checkpoint if missing."""
+        if self.is_sketch_downloaded():
+            return True
+
+        self._clean_stale_locks()
+        if progress_callback:
+            progress_callback(10, "Đang tải mô hình video vẽ tay (anime-seg)...")
+
+        from huggingface_hub import hf_hub_download
+        with _temp_online_env():
+            hf_hub_download(
+                repo_id=SKETCH_REPO,
+                filename="model.safetensors",
+                local_dir=str(self.sketch_dir),
+                etag_timeout=30,
+            )
+
+        if progress_callback:
+            progress_callback(100, "Đã tải xong mô hình video vẽ tay.")
+        return True

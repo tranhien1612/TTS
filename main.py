@@ -1,15 +1,34 @@
 import os
 import sys
 import ctypes
+from pathlib import Path
+
+_base = Path(__file__).resolve().parent
+_hf_home = _base / "models" / "hf"
+_hf_home.mkdir(parents=True, exist_ok=True)
+
+# Only enable offline mode if models are already present locally
+_whisper_local = (_base / "models" / "whisper-large-v3-turbo" / "model.bin").exists()
+if _whisper_local:
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
+    print("[Config] Đã bật HF offline mode (dùng model local)")
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QFont, QIcon
 
-from core.config import APP_NAME, APP_ICON_PNG, APP_ICON_PATH
+from core.config import APP_NAME, APP_ICON_PNG, APP_ICON_PATH, cleanup_outputs_dir
 from ui.main_window import MainWindow
 from ui.styles import GLOBAL_STYLESHEET
 
 
 def main() -> None:
+    # Clean up old generated outputs (audio, video, subtitles, etc.) to prevent disk bloat
+    deleted_files = cleanup_outputs_dir()
+    if deleted_files > 0:
+        print(f"[Cleanup] Đã dọn dẹp {deleted_files} tệp cũ trong thư mục outputs/")
+
     # Windows taskbar icon grouping support
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("neuaudio.studio.app")

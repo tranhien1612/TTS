@@ -38,6 +38,33 @@ def format_srt(segments: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def sync_text_to_segments(text: str, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Synchronize user-edited text back into timestamped segments while preserving timing."""
+    if not text.strip():
+        return []
+    if not segments:
+        return [{"start": 0.0, "end": 5.0, "text": text.strip()}]
+    raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not raw_lines:
+        raw_lines = [text.strip()]
+
+    new_segments = [dict(s) for s in segments]
+    if len(raw_lines) == len(new_segments):
+        for i in range(len(new_segments)):
+            new_segments[i]["text"] = raw_lines[i]
+    elif len(raw_lines) < len(new_segments):
+        for i in range(len(raw_lines)):
+            new_segments[i]["text"] = raw_lines[i]
+        for i in range(len(raw_lines), len(new_segments)):
+            new_segments[i]["text"] = ""
+    else:
+        for i in range(len(new_segments) - 1):
+            new_segments[i]["text"] = raw_lines[i]
+        new_segments[-1]["text"] = " ".join(raw_lines[len(new_segments) - 1 :])
+
+    return [s for s in new_segments if s.get("text", "").strip()]
+
+
 class STTEngine(BaseAudioEngine):
     """Speech-to-Text engine using Whisper-Large-v3-Turbo with INT8 CPU quantization."""
 

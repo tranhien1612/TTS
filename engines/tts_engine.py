@@ -1,3 +1,4 @@
+from huggingface_hub.inference._generated.types import zero_shot_image_classification
 import json
 import logging
 import threading
@@ -120,7 +121,15 @@ class TTSEngine(BaseAudioEngine):
         from omnivoice import OmniVoice
         self._engine = OmniVoice.from_pretrained(str(self.model_manager.omnivoice_dir.resolve()))
         self._engine.eval()
-        self.sample_rate = OMNIVOICE_SAMPLE_RATE
+        # self.sample_rate = OMNIVOICE_SAMPLE_RATE
+        sr = (
+            getattr(self._engine, "sample_rate", None)
+            or getattr(getattr(self._engine, "config", None), "sample_rate", None)
+            or getattr(getattr(self._engine, "config", None), "sampling_rate", None)
+            or OMNIVOICE_SAMPLE_RATE
+        )
+        self.sample_rate = int(sr)
+        # logger.info(f"OmniVoice sample_rate = {self.sample_rate}")
 
     # ─── Voice presets ──────────────────────────────────────────────────
 
@@ -230,6 +239,12 @@ class TTSEngine(BaseAudioEngine):
                 del self._engine
             self._engine = None
             self._is_loaded = False
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
             import gc
             gc.collect()
 
@@ -350,11 +365,27 @@ class TTSEngine(BaseAudioEngine):
             "text": text,
             "ref_audio": str(actual),
             "speed": speed,
+            # "language": "auto", 
         }
         voice_desc = f"Clone ({ref_path.name})"
 
-        with self._lock:
+        import torch
+        with self._lock, torch.inference_mode():
             result = self._engine.generate(**kwargs)
 
         raw_audio = np.concatenate(result) if len(result) > 1 else result[0]
-        return raw_audio, OMNIVOICE_SAMPLE_RATE, voice_desc
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        sr = (
+            getattr(self._engine, "sample_rate", None)
+            or getattr(getattr(self._engine, "config", None), "sample_rate", None)
+            or getattr(getattr(self._engine, "config", None), "sampling_rate", None)
+            or OMNIVOICE_SAMPLE_RATE
+        )
+        
+        sr = int(sr)
+
+        print(f"OmniVoice sample_rate auto-detected = {sr} Hz")
+    
+        return raw_audio, sr, voice_desc

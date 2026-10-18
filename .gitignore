@@ -1,4 +1,4 @@
-venv/
+.venv/
 __pycache__/
 *.pyc
 .vscode/
@@ -6,3 +6,4 @@ dist/
 build/
 models/
 output/
+examples/

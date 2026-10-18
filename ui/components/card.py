@@ -22,8 +22,8 @@ class Card(QFrame):
     def layout(self) -> QVBoxLayout:
         return self._layout
 
-    def addWidget(self, widget: QWidget) -> None:
-        self._layout.addWidget(widget)
+    def addWidget(self, widget: QWidget, stretch: int = 0) -> None:
+        self._layout.addWidget(widget, stretch)
 
     def addLayout(self, layout) -> None:
         self._layout.addLayout(layout)
