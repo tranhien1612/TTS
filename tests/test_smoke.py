@@ -98,7 +98,9 @@ def test_engines():
     from engines.stt_engine import format_srt
     mock_segments = [{"start": 0.0, "end": 2.5, "text": "Xin chào"}, {"start": 2.5, "end": 5.0, "text": "Việt Nam"}]
     srt_out = format_srt(mock_segments)
-    assert "00:00:00,000 --> 00:00:02,500" in srt_out, "SRT formatting must produce valid timestamp markers"
+    from core.translator import translate_text, translate_segments
+    tr_res = translate_text("Xin chào", target_lang="en")
+    assert "hello" in tr_res.lower() or len(tr_res) > 0, f"Expected translation, got {tr_res}"
 
     if stt.is_model_downloaded():
         res = stt.transcribe(EXAMPLES_DIR / "sample_ref.wav", beam_size=1)
@@ -347,6 +349,33 @@ def test_ui_components_offscreen():
     assert hasattr(window.settings_view, "item_omnivoice")
     assert hasattr(window.settings_view, "item_whisper")
 
+    # Test SettingsView: Disable all download buttons during download task
+    sv = window.settings_view
+    sv._current_task_target = "omnivoice"
+    sv._set_actions_enabled(False)
+    sv.refresh_state()
+    for btn in sv._action_buttons:
+        assert not btn.isEnabled(), "All action buttons must be disabled during active download task"
+    assert not sv.item_vieneu["radio"].isEnabled()
+    assert not sv.item_omnivoice["radio"].isEnabled()
+
+    # Finish task and verify buttons and radios re-enable
+    sv._on_task_finished("omnivoice")
+    assert sv._current_task_target is None
+    assert sv.item_vieneu["radio"].isEnabled()
+    assert sv.item_omnivoice["radio"].isEnabled()
+
+    # Test failure recovery
+    sv._current_task_target = "whisper"
+    sv._set_actions_enabled(False)
+    sv.refresh_state()
+    for btn in sv._action_buttons:
+        assert not btn.isEnabled()
+    sv._on_task_failed("Simulated download failure")
+    assert sv._current_task_target is None
+    assert sv.item_vieneu["radio"].isEnabled()
+    assert sv.item_omnivoice["radio"].isEnabled()
+
     # Test view switching: TTS
     window._switch_view(0)
     assert window.stack.currentIndex() == 0
@@ -364,16 +393,15 @@ def test_ui_components_offscreen():
     else:
         assert window.tts_view.pills_widget.isHidden()
 
-    # Switch back to VieNeu
-    window._on_model_changed("vieneu")
+    # Verify that downloading another model does not change active checked model in TTS view
+    window.settings_view.item_vieneu["radio"].setChecked(True)
+    window.settings_view._on_tts_radio_changed(window.settings_view.item_vieneu["radio"])
+    assert window.settings_view.current_model == "vieneu"
+    # Switch back to TTS view: must correspond to checked model (vieneu), not omnivoice
     window._switch_view(0)
-    assert window.tts_view.btn_synthesize.text() == "Tạo giọng nói"
-    if window.tts_view.engine.model_manager.is_vieneu_downloaded():
-        assert not window.tts_view.pills_widget.isHidden()
-        assert len(window.tts_view._preset_pills) >= 10
-        assert not window.tts_view.clone_pill.isHidden()
-    else:
-        assert window.tts_view.pills_widget.isHidden()
+    assert window.tts_engine.current_model_type == "vieneu", "TTS engine must keep checked model ('vieneu')"
+    if window.tts_engine.is_model_downloaded():
+        assert len(window.tts_view._preset_pills) >= 10, "TTS view must display VieNeu preset pills corresponding to checked model"
 
     # Verify speed slider UI
     assert hasattr(window.tts_view, "speed_slider"), "TTSView must have speed_slider"

@@ -144,8 +144,11 @@ except Exception:
 
 
 # ----------------------------------------------------------
-#  6. FFMPEG BINARY SETUP
+#  6. FFMPEG BINARY SETUP & QT MEDIA BACKEND
 # ----------------------------------------------------------
+if sys.platform == "win32":
+    os.environ.setdefault("QT_MEDIA_BACKEND", "windows")
+
 def _setup_ffmpeg_bin():
     try:
         candidates = []
@@ -162,11 +165,6 @@ def _setup_ffmpeg_bin():
                 exe = ffmpeg_dir / "ffmpeg.exe"
                 if exe.exists():
                     os.environ["FFMPEG_BINARY"] = str(exe)
-                if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
-                    try:
-                        os.add_dll_directory(f_str)
-                    except Exception:
-                        pass
                 break
     except Exception:
         pass

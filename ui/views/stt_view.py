@@ -208,7 +208,7 @@ class STTView(QWidget):
         self.transcript_box = QTextEdit()
         self.transcript_box.setReadOnly(False)
         self.transcript_box.setAcceptRichText(False)
-        self.transcript_box.setPlaceholderText("Văn bản sau khi nhận dạng từ tệp âm thanh sẽ hiển thị tại đây (có thể chỉnh sửa)...")
+        self.transcript_box.setPlaceholderText("Văn bản sau khi nhận dạng từ tệp âm thanh sẽ hiển thị tại đây...")
         self.transcript_box.setMinimumHeight(240)
         box_pal = self.transcript_box.palette()
         box_pal.setColor(QPalette.ColorRole.Base, QColor("#FFFFFF"))
@@ -263,7 +263,7 @@ class STTView(QWidget):
         self.translated_box = QTextEdit()
         self.translated_box.setReadOnly(False)
         self.translated_box.setAcceptRichText(False)
-        self.translated_box.setPlaceholderText("Văn bản sau khi dịch sẽ hiển thị tại đây (có thể chỉnh sửa)...")
+        self.translated_box.setPlaceholderText("Văn bản sau khi dịch sẽ hiển thị tại đây...")
         self.translated_box.setMinimumHeight(240)
         trans_box_pal = self.translated_box.palette()
         trans_box_pal.setColor(QPalette.ColorRole.Base, QColor("#FFFFFF"))
@@ -378,11 +378,8 @@ class STTView(QWidget):
         self._cleanup_trans_worker()
         tr_text, tr_segs = result
         self.current_translated_segments = tr_segs
-        if len(tr_segs) > 1:
-            display_text = "\n".join(s["text"].strip() for s in tr_segs if s.get("text", "").strip())
-        else:
-            display_text = tr_text
-        self.translated_box.setPlainText(display_text or tr_text)
+        display_text = tr_text or "\n".join(s["text"].strip() for s in tr_segs if s.get("text", "").strip())
+        self.translated_box.setPlainText(display_text)
         self.translated_box.moveCursor(self.translated_box.textCursor().MoveOperation.End)
         lang_name = self.combo_target_lang.currentText()
         self.status_label.setText(f"✓ Đã dịch sang {lang_name} thành công!")

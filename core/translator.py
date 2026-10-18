@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,69 @@ SUPPORTED_TRANSLATION_LANGUAGES: List[Tuple[str, str]] = [
     ("Tiếng Tây Ban Nha", "es"),
     ("Tiếng Nga", "ru"),
 ]
+
+
+def _translate_google(chunk: str, target_lang: str, source_lang: str) -> Optional[str]:
+    """Translate text using Google Translate Chrome extension API (dict-chrome-ex)."""
+    url = (
+        f"https://translate.googleapis.com/translate_a/single?client=dict-chrome-ex&sl={source_lang}&tl={target_lang}&dt=t&q="
+        + urllib.parse.quote(chunk)
+    )
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        if data and isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+            res = "".join([part[0] for part in data[0] if part and part[0]])
+            if res:
+                return res
+    return None
+
+
+def _translate_mymemory(chunk: str, target_lang: str, source_lang: str) -> Optional[str]:
+    """Fallback translation using MyMemory API."""
+    s_lang = source_lang if source_lang != "auto" else "autodetect"
+    t_lang = target_lang.split("-")[0] if "-" in target_lang and target_lang != "zh-CN" else target_lang
+    url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(chunk)}&langpair={s_lang}|{t_lang}"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+    )
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        res = data.get("responseData", {}).get("translatedText")
+        if res and not str(res).startswith("MYMEMORY WARNING"):
+            return str(res)
+    return None
+
+
+def _translate_single_chunk(chunk: str, target_lang: str, source_lang: str) -> str:
+    """Send a single chunk of text to the translation endpoint with automatic fallback."""
+    if not chunk.strip():
+        return ""
+
+    # 1. Primary: Google Translate (dict-chrome-ex client)
+    try:
+        res = _translate_google(chunk, target_lang, source_lang)
+        if res:
+            return res
+    except Exception as e:
+        logger.warning(f"Google translate primary failed: {e}")
+
+    # 2. Secondary fallback: MyMemory
+    try:
+        res = _translate_mymemory(chunk, target_lang, source_lang)
+        if res:
+            return res
+    except Exception as e:
+        logger.warning(f"MyMemory translate fallback failed: {e}")
+
+    raise RuntimeError("Không thể kết nối đến máy chủ dịch thuật. Vui lòng kiểm tra lại kết nối mạng.")
 
 
 def translate_text(text: str, target_lang: str = "vi", source_lang: str = "auto") -> str:
@@ -54,29 +118,6 @@ def translate_text(text: str, target_lang: str = "vi", source_lang: str = "auto"
     return _translate_single_chunk(text, target_lang, source_lang)
 
 
-def _translate_single_chunk(chunk: str, target_lang: str, source_lang: str) -> str:
-    """Send a single chunk of text to the translation endpoint."""
-    if not chunk.strip():
-        return ""
-    try:
-        url = (
-            f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={source_lang}&tl={target_lang}&dt=t&q="
-            + urllib.parse.quote(chunk)
-        )
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
-        )
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if data and isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
-                return "".join([part[0] for part in data[0] if part and part[0]])
-            return chunk
-    except Exception as e:
-        logger.warning(f"Translation failed: {e}")
-        return chunk
-
-
 def translate_segments(
     segments: List[Dict[str, Any]],
     target_lang: str = "vi",
@@ -97,7 +138,7 @@ def translate_segments(
 
         try:
             translated_joined = _translate_single_chunk(joined, target_lang, source_lang)
-            parts = [p.strip() for p in translated_joined.split("|||")]
+            parts = [p.strip() for p in re.split(r"\s*\|\s*\|\s*\|\s*", translated_joined)]
 
             if len(parts) == len(batch):
                 for s, tr_text in zip(batch, parts):
@@ -116,7 +157,8 @@ def translate_segments(
                         "end": s.get("end", 0.0),
                         "text": tr,
                     })
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Segment translation batch failed: {e}")
             for s in batch:
                 translated_segments.append({
                     "start": s.get("start", 0.0),

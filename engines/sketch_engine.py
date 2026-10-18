@@ -12,11 +12,9 @@ from typing import Callable, Optional, Union, Tuple, Dict, Any
 
 import numpy as np
 from PIL import Image
-import torch
 
 from core.config import OUTPUTS_DIR, ASSETS_DIR
 from core.handdraw.settings import Settings
-from core.handdraw.render import render_video
 
 
 LOGGER = logging.getLogger("engines.sketch_engine")
@@ -33,12 +31,16 @@ class SketchEngine:
     @staticmethod
     def is_cuda_available() -> bool:
         """Check if CUDA GPU acceleration is available."""
-        return torch.cuda.is_available()
+        try:
+            import torch
+            return torch.cuda.is_available()
+        except Exception:
+            return False
 
     @staticmethod
     def is_nvenc_available() -> bool:
         """Check if NVIDIA NVENC hardware encoder is likely available."""
-        return torch.cuda.is_available()
+        return SketchEngine.is_cuda_available()
 
     def is_assets_ready(self) -> bool:
         """Verify that required model weights and hand assets exist."""
@@ -202,7 +204,8 @@ class SketchEngine:
             if progress_callback:
                 progress_callback(fraction, description)
 
-        # Execute core render
+        # Execute core render (lazy import to keep app startup fast)
+        from core.handdraw.render import render_video
         video_path, report = render_video(
             img_np,
             settings,

@@ -24,6 +24,8 @@ from core.config import (
     DEFAULT_VOICE,
     AUDIO_FILE_FILTER,
     EXAMPLES_DIR,
+    MODEL_OMNIVOICE,
+    MODEL_VIENEU,
 )
 from core.worker import WorkerThread
 from engines.tts_engine import TTSEngine
@@ -307,12 +309,11 @@ class TTSView(QWidget):
             else:
                 self.voice_info_label.setText("🔊 Sẵn sàng tạo âm thanh.")
 
+        # Ensure progress bar animation is stopped and hidden if idle, and inputs are enabled
+        if self.worker is None or not self.worker.isRunning():
             self.btn_synthesize.setText("Tạo giọng nói")
             self.btn_synthesize.setEnabled(True)
             self.status_msg_label.setText("Sẵn sàng tạo âm thanh.")
-
-        # Ensure progress bar animation is stopped and hidden if idle, and inputs are enabled
-        if self.worker is None or not self.worker.isRunning():
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(False)
@@ -424,9 +425,9 @@ class TTSView(QWidget):
     def _cleanup_worker(self) -> None:
         if self.worker is not None:
             try:
-                self.worker.quit()
-                self.worker.wait(200)
-                self.worker.deleteLater()
+                if self.worker.isRunning():
+                    self.worker.quit()
+                    self.worker.wait(1000)
             except Exception:
                 pass
             self.worker = None
@@ -481,10 +482,16 @@ class TTSView(QWidget):
     def _run_synthesis_inference(self, text: str, voice_ref: str) -> None:
         self.btn_synthesize.setEnabled(False)
         self._set_inputs_enabled(False)
-        self.btn_synthesize.setText("Đang xử lý giọng nói...")
-        self.status_msg_label.setText("Đang xử lý tạo giọng nói...")
+        if getattr(self.engine, "current_model_type", "") == MODEL_OMNIVOICE:
+            self.status_msg_label.setText("Đang nhân bản giọng với OmniVoice (vui lòng chờ)...")
+        else:
+            self.status_msg_label.setText("Đang xử lý tạo giọng nói...")
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setVisible(True)
+
+        # Release previous audio player file lock
+        if hasattr(self, "player_card") and hasattr(self.player_card, "stop_and_release"):
+            self.player_card.stop_and_release()
 
         # Run inference asynchronously via QThread Worker
         self._cleanup_worker()
@@ -507,7 +514,7 @@ class TTSView(QWidget):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)
-        self._cleanup_worker()
+        self.worker = None
 
         output_path: Path = result["output_path"]
         duration = result["duration"]
@@ -529,5 +536,5 @@ class TTSView(QWidget):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)
-        self._cleanup_worker()
+        self.worker = None
         self.status_msg_label.setText(f"❌ Lỗi: {error_msg}")

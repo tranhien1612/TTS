@@ -113,9 +113,11 @@ class ModelManager:
         """Check if OmniVoice model weights exist locally in models/omnivoice."""
         if not (self.omnivoice_dir / "config.json").is_file():
             return False
-        if not (self.omnivoice_dir / "model.safetensors").is_file():
+        model_st = self.omnivoice_dir / "model.safetensors"
+        if not model_st.is_file() or model_st.stat().st_size < 1024 * 1024:
             return False
-        if not (self.omnivoice_dir / "audio_tokenizer" / "model.safetensors").is_file():
+        tok_st = self.omnivoice_dir / "audio_tokenizer" / "model.safetensors"
+        if not tok_st.is_file() or tok_st.stat().st_size < 1024 * 1024:
             return False
         return True
 
@@ -256,11 +258,10 @@ class ModelManager:
         return True
 
     def is_sketch_downloaded(self) -> bool:
-        """Check if SkyTNT Anime-Seg model checkpoint exists locally."""
-        if (self.sketch_dir / "model.safetensors").is_file():
-            return True
-        if (ASSETS_DIR / "v181d" / "model.safetensors").is_file():
-            return True
+        """Check if SkyTNT Anime-Seg model checkpoint exists locally and is valid (> 1MB)."""
+        for p in [self.sketch_dir / "model.safetensors", ASSETS_DIR / "v181d" / "model.safetensors"]:
+            if p.is_file() and p.stat().st_size > 1024 * 1024:
+                return True
         return False
 
     def ensure_sketch_model(self, progress_callback: Optional[Callable[[int, str], None]] = None) -> bool:

@@ -43,7 +43,7 @@ def _find_checkpoint() -> Path:
     if hasattr(sys, "_MEIPASS"):
         candidates.insert(0, Path(sys._MEIPASS) / "assets" / "v181d" / "model.safetensors")
     for cand in candidates:
-        if cand.is_file():
+        if cand.is_file() and cand.stat().st_size > 1024 * 1024:
             return cand
     return candidates[0]
 
@@ -63,8 +63,8 @@ def _get_model(device):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)  # Avoid upstream model/__init__, Lightning and training imports.
         checkpoint = _find_checkpoint()
-        if not checkpoint.is_file():
-            raise RuntimeError(f"Missing bundled Anime Segmentation checkpoint: {checkpoint}")
+        if not checkpoint.is_file() or checkpoint.stat().st_size < 1024 * 1024:
+            raise RuntimeError(f"Missing or invalid Anime Segmentation checkpoint: {checkpoint}")
         weights = load_file(str(checkpoint), device="cpu")
         state = {key.removeprefix("net."): value for key, value in weights.items()
                  if key.startswith("net.")}

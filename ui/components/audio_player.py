@@ -247,8 +247,17 @@ class AudioPlayer(QFrame):
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.playbackStateChanged.connect(self._on_playback_state_changed)
 
+    def stop_and_release(self) -> None:
+        """Stop playback and release the underlying file handle to avoid lock conflicts."""
+        try:
+            self.player.stop()
+            self.player.setSource(QUrl())
+        except Exception:
+            pass
+
     def load_audio(self, audio_path: Path, description: str = "") -> None:
         """Load an audio file into the player and initialize waveform visualizer."""
+        self.stop_and_release()
         self.current_audio_path = Path(audio_path)
         if not self.current_audio_path.exists():
             return

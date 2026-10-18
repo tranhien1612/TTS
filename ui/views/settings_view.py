@@ -54,6 +54,7 @@ class SettingsView(QWidget):
         self._current_tts_model = current_model
         self.model_manager = ModelManager()
         self.worker: Optional[WorkerThread] = None
+        self._current_task_target: Optional[str] = None
 
         self._action_buttons: list[QPushButton] = []
         self._setup_ui()
@@ -137,7 +138,7 @@ class SettingsView(QWidget):
         # Item 1: VieNeu
         self.item_vieneu = self._create_model_row(
             key=MODEL_VIENEU,
-            name="VieNeu TTS (Khuyên dùng tiếng Việt)",
+            name="VieNeu TTS (Khuyên dùng cho tiếng Việt)",
             tag="Tiếng Việt · Clone",
             description="Mô hình ONNX siêu nhẹ tối ưu tiếng Việt tự nhiên và hỗ trợ clone giọng từ tệp mẫu.",
             on_action=lambda: self._start_model_task("vieneu"),
@@ -202,15 +203,21 @@ class SettingsView(QWidget):
     ) -> Dict[str, Any]:
         """Build an interactive card item with status indicator and action button."""
         container = QFrame()
+        container.setObjectName("modelItemContainer")
         container.setStyleSheet(f"""
-            QFrame {{
+            QFrame#modelItemContainer {{
                 background-color: #F8FAFC;
                 border: 1px solid {BORDER_COLOR};
                 border-radius: 10px;
                 padding: 12px;
             }}
-            QFrame:hover {{
+            QFrame#modelItemContainer:hover {{
                 border-color: #CBD5E1;
+            }}
+            QLabel {{
+                border: none;
+                background-color: transparent;
+                padding: 0px;
             }}
         """)
         h_layout = QHBoxLayout(container)
@@ -232,18 +239,18 @@ class SettingsView(QWidget):
         title_row.setSpacing(8)
 
         lbl_name = QLabel(name)
-        lbl_name.setStyleSheet("font-size: 14px; font-weight: 600; color: #0F172A;")
+        lbl_name.setStyleSheet("font-size: 14px; font-weight: 600; color: #0F172A; border: none; background-color: transparent; padding: 0px;")
         title_row.addWidget(lbl_name)
 
         lbl_tag = QLabel(tag)
         lbl_tag.setProperty("class", "badge-accent")
-        lbl_tag.setStyleSheet(f"font-size: 11px; padding: 2px 8px; background-color: {ACCENT_LIGHT}; color: {ACCENT_PRIMARY}; border-radius: 4px;")
+        lbl_tag.setStyleSheet(f"font-size: 11px; padding: 2px 8px; background-color: {ACCENT_LIGHT}; color: {ACCENT_PRIMARY}; border-radius: 4px; border: none;")
         title_row.addWidget(lbl_tag)
         title_row.addStretch(1)
         info_col.addLayout(title_row)
 
         lbl_desc = QLabel(description)
-        lbl_desc.setStyleSheet("color: #64748B; font-size: 12px;")
+        lbl_desc.setStyleSheet("color: #64748B; font-size: 12px; border: none; background-color: transparent; padding: 0px;")
         lbl_desc.setWordWrap(True)
         info_col.addWidget(lbl_desc)
 
@@ -307,6 +314,7 @@ class SettingsView(QWidget):
     def _update_item_ui(self, item: Dict[str, Any], is_downloaded: bool, is_loaded: bool) -> None:
         badge: QLabel = item["status_badge"]
         btn: QPushButton = item["action_btn"]
+        is_task_running = (self.worker is not None and self.worker.isRunning()) or bool(self._current_task_target)
 
         if is_downloaded:
             badge.setText("● Đã sẵn sàng")
@@ -315,16 +323,31 @@ class SettingsView(QWidget):
         else:
             badge.setText("○ Chưa tải về")
             badge.setStyleSheet("background-color: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; border-radius: 6px; padding: 4px 10px; font-weight: 600; font-size: 12px;")
-            btn.setText("Tải về")
             btn.setVisible(True)
-            btn.setEnabled(True)
+            if is_task_running:
+                btn.setEnabled(False)
+                if item.get("key") == self._current_task_target:
+                    btn.setText("Đang tải...")
+                else:
+                    btn.setText("Tải về")
+            else:
+                btn.setText("Tải về")
+                btn.setEnabled(True)
             btn.setStyleSheet(PRIMARY_BUTTON_STYLE)
 
     # ─── Event Handlers ───────────────────────────────────────────────────
 
+    def set_current_tts_model(self, model_key: str) -> None:
+        """Update selected radio button to match model_key."""
+        self._current_tts_model = model_key
+        if model_key == MODEL_OMNIVOICE and hasattr(self, "item_omnivoice") and self.item_omnivoice.get("radio"):
+            self.item_omnivoice["radio"].setChecked(True)
+        elif hasattr(self, "item_vieneu") and self.item_vieneu.get("radio"):
+            self.item_vieneu["radio"].setChecked(True)
+
     def _on_tts_radio_changed(self, button: QRadioButton) -> None:
         key = button.property("model_key")
-        if key and key != self._current_tts_model:
+        if key:
             self._current_tts_model = key
             self.model_changed.emit(key)
             self.refresh_state()
@@ -334,31 +357,39 @@ class SettingsView(QWidget):
     def _set_actions_enabled(self, enabled: bool) -> None:
         for btn in self._action_buttons:
             btn.setEnabled(enabled)
+        if hasattr(self, "item_vieneu") and self.item_vieneu.get("radio"):
+            self.item_vieneu["radio"].setEnabled(enabled)
+        if hasattr(self, "item_omnivoice") and self.item_omnivoice.get("radio"):
+            self.item_omnivoice["radio"].setEnabled(enabled)
 
     def _start_model_task(self, target: str) -> None:
         if self.worker is not None and self.worker.isRunning():
             return
 
+        self._current_task_target = target
         self._set_actions_enabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)
         self.status_label.setText(f"Đang chuẩn bị xử lý mô hình '{target}'...")
+        self.refresh_state()
 
         def _task_runner(progress_callback=None):
             if target == "vieneu":
                 if not self.model_manager.is_vieneu_downloaded():
                     self.model_manager.ensure_vieneu_model(progress_callback)
-                if progress_callback:
-                    progress_callback(90, "Đang nạp mô hình VieNeu vào bộ nhớ...")
-                if self.tts_engine:
+                # Chỉ nạp vào RAM và kích hoạt nếu VieNeu đang là model được tích chọn
+                if self._current_tts_model == MODEL_VIENEU and self.tts_engine:
+                    if progress_callback:
+                        progress_callback(90, "Đang nạp mô hình VieNeu vào bộ nhớ...")
                     self.tts_engine.set_model_type(MODEL_VIENEU)
                     self.tts_engine.load_model(progress_callback)
             elif target == "omnivoice":
                 if not self.model_manager.is_omnivoice_downloaded():
                     self.model_manager.ensure_omnivoice_model(progress_callback)
-                if progress_callback:
-                    progress_callback(90, "Đang nạp mô hình OmniVoice vào bộ nhớ...")
-                if self.tts_engine:
+                # Chỉ nạp vào RAM và kích hoạt nếu OmniVoice đang là model được tích chọn
+                if self._current_tts_model == MODEL_OMNIVOICE and self.tts_engine:
+                    if progress_callback:
+                        progress_callback(90, "Đang nạp mô hình OmniVoice vào bộ nhớ...")
                     self.tts_engine.set_model_type(MODEL_OMNIVOICE)
                     self.tts_engine.load_model(progress_callback)
             elif target == "whisper":
@@ -390,28 +421,20 @@ class SettingsView(QWidget):
             self.progress_bar.setRange(0, 0)
 
     def _on_task_finished(self, target: str) -> None:
+        self._current_task_target = None
         self.progress_bar.setVisible(False)
-        self._set_actions_enabled(True)
         self._cleanup_worker()
+        self._set_actions_enabled(True)
         self.refresh_state()
         self.status_label.setText(f"✓ Mô hình '{target}' đã được tải và khởi tạo sẵn sàng sử dụng!")
-        # QMessageBox.information(
-        #     self,
-        #     "Thành công",
-        #     f"Mô hình '{target}' đã được chuẩn bị và khởi tạo thành công!\nBạn có thể quay lại các tab chức năng để sử dụng ngay.",
-        # )
 
     def _on_task_failed(self, error_msg: str) -> None:
+        self._current_task_target = None
         self.progress_bar.setVisible(False)
-        self._set_actions_enabled(True)
         self._cleanup_worker()
+        self._set_actions_enabled(True)
         self.refresh_state()
         self.status_label.setText(f"❌ Xử lý mô hình thất bại: {error_msg}. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại.")
-        # QMessageBox.critical(
-        #     self,
-        #     "Lỗi",
-        #     f"Không thể tải hoặc khởi tạo mô hình:\n{error_msg}\n\nVui lòng kiểm tra lại kết nối mạng hoặc thử lại.",
-        # )
 
     def _cleanup_worker(self) -> None:
         if self.worker is not None:

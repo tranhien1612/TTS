@@ -7,13 +7,6 @@ _base = Path(__file__).resolve().parent
 _hf_home = _base / "models" / "hf"
 _hf_home.mkdir(parents=True, exist_ok=True)
 
-# Only enable offline mode if models are already present locally
-_whisper_local = (_base / "models" / "whisper-large-v3-turbo" / "model.bin").exists()
-if _whisper_local:
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
-    os.environ["HF_DATASETS_OFFLINE"] = "1"
-    print("[Config] Đã bật HF offline mode (dùng model local)")
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QFont, QIcon

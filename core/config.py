@@ -31,13 +31,18 @@ if ASSETS_DIR is None:
 ICONS_DIR = ASSETS_DIR / "icons"
 FFMPEG_BIN_DIR = ASSETS_DIR / "ffmpeg_bin"
 
+# Force native Windows Media Foundation backend for Qt Multimedia on Windows
+# Prevents crash/corruption with external FFmpeg binaries and DLLs
+if sys.platform == "win32":
+    os.environ.setdefault("QT_MEDIA_BACKEND", "windows")
+
 FFMPEG_EXE = FFMPEG_BIN_DIR / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
 FFPROBE_EXE = FFMPEG_BIN_DIR / ("ffprobe.exe" if sys.platform == "win32" else "ffprobe")
 FFPLAY_EXE = FFMPEG_BIN_DIR / ("ffplay.exe" if sys.platform == "win32" else "ffplay")
 
 
 def setup_ffmpeg_env() -> None:
-    """Configure system environment to prioritize bundled assets/ffmpeg_bin."""
+    """Configure system environment to prioritize bundled assets/ffmpeg_bin for subprocesses."""
     if FFMPEG_BIN_DIR.exists():
         bin_str = str(FFMPEG_BIN_DIR)
         current_path = os.environ.get("PATH", "")
@@ -46,20 +51,10 @@ def setup_ffmpeg_env() -> None:
             os.environ["PATH"] = bin_str + os.pathsep + current_path
         if FFMPEG_EXE.exists():
             os.environ["FFMPEG_BINARY"] = str(FFMPEG_EXE)
-        if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
-            try:
-                os.add_dll_directory(bin_str)
-            except Exception:
-                pass
 
 
 setup_ffmpeg_env()
 
-# Enable offline mode for HuggingFace / Transformers if local models exist
-if (MODELS_DIR / "whisper-large-v3-turbo" / "model.bin").exists():
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-    os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
 
 APP_ICON_PATH = ICONS_DIR / "app_icon.ico"
 APP_ICON_PNG = ICONS_DIR / "app_icon.png"

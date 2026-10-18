@@ -158,6 +158,9 @@ class MainWindow(QMainWindow):
             btn.style().polish(btn)
 
         if index == 0:
+            active_model = self.settings_view.current_model if hasattr(self, "settings_view") else self.tts_engine.current_model_type
+            if self.tts_engine.current_model_type != active_model:
+                self.tts_engine.set_model_type(active_model)
             self.tts_view.refresh_state()
         elif index == 3 and hasattr(self, "dubbing_view"):
             self.dubbing_view.refresh_state()
@@ -167,6 +170,8 @@ class MainWindow(QMainWindow):
     def _on_model_changed(self, model_key: str) -> None:
         """Handle model switch from settings: update engine and refresh TTS view."""
         self.tts_engine.set_model_type(model_key)
+        if hasattr(self, "settings_view"):
+            self.settings_view.set_current_tts_model(model_key)
         self.tts_view.refresh_state()
 
     def _auto_init_local_models(self) -> None:
@@ -229,5 +234,10 @@ class MainWindow(QMainWindow):
             self.tts_engine.unload_model()
         if hasattr(self, "stt_engine"):
             self.stt_engine.unload_model()
+        if hasattr(self, "sketch_engine") and hasattr(self.sketch_engine, "unload_model"):
+            self.sketch_engine.unload_model()
+
+        import gc
+        gc.collect()
 
         super().closeEvent(event)

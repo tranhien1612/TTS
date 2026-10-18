@@ -1,4 +1,3 @@
-from huggingface_hub.inference._generated.types import zero_shot_image_classification
 import json
 import logging
 import threading
@@ -48,10 +47,10 @@ class TTSEngine(BaseAudioEngine):
 
     def set_model_type(self, model_type: str) -> None:
         """Switch to a different TTS model. Unloads the current model if loaded."""
-        if model_type == self.current_model_type and self._is_loaded:
+        if model_type == self.current_model_type:
             return
-        self.unload_model()
         self.current_model_type = model_type
+        self.unload_model()
         self._load_cached_preset_voices()
 
     @property
@@ -86,16 +85,26 @@ class TTSEngine(BaseAudioEngine):
         with self._lock:
             if self._is_loaded and self._engine is not None:
                 return True
+            target_type = self.current_model_type
             try:
                 loader = {
                     MODEL_VIENEU: self._load_vieneu,
                     MODEL_OMNIVOICE: self._load_omnivoice,
-                }[self.current_model_type]
+                }[target_type]
                 loader(progress_callback)
+                if self.current_model_type != target_type:
+                    if hasattr(self._engine, "close"):
+                        try:
+                            self._engine.close()
+                        except Exception:
+                            pass
+                    self._engine = None
+                    self._is_loaded = False
+                    return False
                 self._is_loaded = True
                 return True
             except Exception as e:
-                logger.error(f"Failed to load {self.current_model_type} model: {e}")
+                logger.error(f"Failed to load {target_type} model: {e}")
                 self._is_loaded = False
                 self._engine = None
                 raise
@@ -228,8 +237,18 @@ class TTSEngine(BaseAudioEngine):
     # ─── Unload ─────────────────────────────────────────────────────────
 
     def unload_model(self) -> None:
-        """Release TTS model resources."""
-        with self._lock:
+        """Release TTS model resources without blocking GUI thread if a background loader is busy."""
+        if not self._is_loaded and self._engine is None and not self._lock.locked():
+            return
+
+        acquired = self._lock.acquire(blocking=False)
+        if not acquired:
+            # Background thread is currently loading. Since current_model_type was already updated,
+            # load_model() will automatically discard the obsolete model upon completion.
+            self._is_loaded = False
+            return
+
+        try:
             if self._engine is not None:
                 if hasattr(self._engine, "close"):
                     try:
@@ -247,6 +266,8 @@ class TTSEngine(BaseAudioEngine):
                 pass
             import gc
             gc.collect()
+        finally:
+            self._lock.release()
 
     # ─── Synthesis ──────────────────────────────────────────────────────
 
@@ -298,17 +319,37 @@ class TTSEngine(BaseAudioEngine):
         raw_audio, sr, voice_desc = dispatcher(clean_text, voice_ref, speed=speed)
         elapsed = time.time() - start_time
 
-        # Normalize to float32
+        # Convert tensor to numpy and normalize
+        if hasattr(raw_audio, "detach"):
+            raw_audio = raw_audio.detach().cpu().numpy()
+        elif hasattr(raw_audio, "cpu"):
+            raw_audio = raw_audio.cpu().numpy()
+
         if not isinstance(raw_audio, np.ndarray):
             raw_audio = np.asarray(raw_audio, dtype=np.float32)
-        elif raw_audio.dtype != np.float32:
+
+        # Handle dimensions (flatten single channel if needed, transpose if (channels, samples))
+        if raw_audio.ndim > 1:
+            if raw_audio.shape[0] == 1:
+                raw_audio = raw_audio.squeeze(0)
+            elif raw_audio.shape[-1] == 1:
+                raw_audio = raw_audio.squeeze(-1)
+            elif raw_audio.ndim == 2 and raw_audio.shape[0] < raw_audio.shape[1]:
+                raw_audio = raw_audio.T
+
+        if raw_audio.dtype != np.float32:
             raw_audio = raw_audio.astype(np.float32)
 
         duration_sec = len(raw_audio) / float(sr) if sr > 0 else 0.0
 
-        # timestamp_str = time.strftime("%Y%m%d_%H%M%S") 
-        out_path = OUTPUTS_DIR / "sample.wav" #f"tts_{timestamp_str}.wav"
-        sf.write(str(out_path), raw_audio, sr)
+        timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+        out_path = OUTPUTS_DIR / f"tts_{timestamp_str}_{int(time.time() * 1000) % 1000}.wav"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            sf.write(str(out_path), raw_audio, sr)
+        except Exception:
+            out_path = OUTPUTS_DIR / f"tts_fallback_{int(time.time())}.wav"
+            sf.write(str(out_path), raw_audio, sr)
 
         return {
             "audio": raw_audio,
@@ -332,8 +373,8 @@ class TTSEngine(BaseAudioEngine):
         return self.synthesize(text=text, voice_ref=voice, speed=speed, **kwargs)
 
     def _synthesize_vieneu(self, text: str, voice_ref: Optional[str], speed: float = 1.0) -> tuple:
-        """VieNeu inference: configure speed directly in infer(..., speed=speed)."""
-        kwargs: Dict[str, Any] = {"text": text, "speed": speed}
+        """VieNeu inference with post-processing speed adjustment if needed."""
+        kwargs: Dict[str, Any] = {"text": text}
         ref_target = voice_ref or DEFAULT_VOICE
 
         if Path(ref_target).exists():
@@ -349,33 +390,101 @@ class TTSEngine(BaseAudioEngine):
             raw_audio = self._engine.infer(**kwargs)
 
         sr = getattr(self._engine, "sample_rate", self.sample_rate)
+
+        # Apply tempo adjustment if user changed speed (VieNeu doesn't support native speed parameter)
+        if abs(speed - 1.0) > 0.02:
+            try:
+                from core.dubbing_service import adjust_audio_speed_atempo
+                raw_audio = adjust_audio_speed_atempo(raw_audio, sr, speed)
+            except Exception as e:
+                logger.debug(f"Speed adjustment via atempo skipped: {e}")
+
+        import gc
+        gc.collect()
         return raw_audio, sr, voice_desc
 
     def _synthesize_omnivoice(self, text: str, voice_ref: Optional[str], speed: float = 1.0) -> tuple:
-        """OmniVoice inference: configure speed directly in generate(..., speed=speed)."""
+        """OmniVoice inference optimized for CPU/GPU: auto ref_text, num_step capping, and RAM management."""
         if not voice_ref or not Path(voice_ref).exists():
             raise ValueError(
                 "Mô hình OmniVoice yêu cầu tệp âm thanh mẫu để nhân bản giọng nói (Voice Clone).\n"
                 "Vui lòng nhấn vào nút 'Voice Clone' để chọn tệp âm thanh mẫu (.wav, .mp3, .m4a)."
             )
 
+        import torch
+        import gc
+
         ref_path = Path(voice_ref).resolve()
         actual = self._prepare_reference_audio(ref_path)
+
+        # 1. Trim reference audio to 8s max if too long to prevent attention O(N^2) memory explosion
+        try:
+            info = sf.info(str(actual))
+            if info.duration > 10.0:
+                trimmed_wav = OUTPUTS_DIR / f"_trim_{actual.name}"
+                data, in_sr = sf.read(str(actual), stop=int(8.0 * info.samplerate))
+                sf.write(str(trimmed_wav), data, in_sr)
+                actual = trimmed_wav
+        except Exception:
+            pass
+
         kwargs: Dict[str, Any] = {
             "text": text,
             "ref_audio": str(actual),
             "speed": speed,
-            # "language": "auto", 
         }
+
+        # 2. Prevent OmniVoice from downloading/loading 3GB HuggingFace Whisper on CPU:
+        # Check text cache or sidecar .txt or local faster-whisper STT
+        if not hasattr(self, "_ref_text_cache"):
+            self._ref_text_cache = {}
+        ref_key = str(actual)
+        ref_text = self._ref_text_cache.get(ref_key)
+        if not ref_text:
+            txt_file = ref_path.with_suffix(".txt")
+            if txt_file.exists():
+                try:
+                    ref_text = txt_file.read_text(encoding="utf-8").strip()
+                except Exception:
+                    pass
+        if not ref_text and self.model_manager.is_whisper_downloaded():
+            try:
+                from engines.stt_engine import STTEngine
+                stt = STTEngine()
+                res = stt.transcribe(str(actual))
+                ref_text = res.get("text", "").strip()
+                if ref_text:
+                    self._ref_text_cache[ref_key] = ref_text
+            except Exception:
+                pass
+        if ref_text:
+            kwargs["ref_text"] = ref_text
+
+        # 3. CPU optimization: reduce decoding steps to 10 (3.2x speedup, prevents 7-minute hang)
+        if not torch.cuda.is_available():
+            kwargs["num_step"] = 10
+
         voice_desc = f"Clone ({ref_path.name})"
 
-        import torch
         with self._lock, torch.inference_mode():
             result = self._engine.generate(**kwargs)
 
-        raw_audio = np.concatenate(result) if len(result) > 1 else result[0]
+        if isinstance(result, (list, tuple)):
+            if len(result) > 1:
+                try:
+                    raw_audio = np.concatenate(result)
+                except Exception:
+                    raw_audio = torch.cat(result, dim=-1)
+            elif len(result) == 1:
+                raw_audio = result[0]
+            else:
+                raw_audio = np.zeros(0, dtype=np.float32)
+        else:
+            raw_audio = result
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        gc.collect()
 
         sr = (
             getattr(self._engine, "sample_rate", None)
@@ -383,9 +492,5 @@ class TTSEngine(BaseAudioEngine):
             or getattr(getattr(self._engine, "config", None), "sampling_rate", None)
             or OMNIVOICE_SAMPLE_RATE
         )
-        
         sr = int(sr)
-
-        print(f"OmniVoice sample_rate auto-detected = {sr} Hz")
-    
         return raw_audio, sr, voice_desc

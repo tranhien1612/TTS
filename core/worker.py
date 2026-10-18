@@ -18,6 +18,7 @@ class WorkerThread(QThread):
         self.args = args
         self.kwargs = kwargs
         self.result: Optional[Any] = None
+        self.finished.connect(self.deleteLater)
 
     def run(self) -> None:
         self.started_task.emit()
@@ -37,5 +38,6 @@ class WorkerThread(QThread):
             traceback.print_exc()
             self.failed_task.emit(str(exc))
         finally:
-            import gc
-            gc.collect()
+            self.func = None
+            self.args = ()
+            self.kwargs = {}
