@@ -1,5 +1,6 @@
 import os
 import sys
+import signal
 import ctypes
 from pathlib import Path
 
@@ -10,13 +11,21 @@ _hf_home.mkdir(parents=True, exist_ok=True)
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtCore import QTimer
 
-from core.config import APP_NAME, APP_ICON_PNG, APP_ICON_PATH, cleanup_outputs_dir
+from core.config import APP_NAME, APP_ICON_PNG, APP_ICON_PATH, cleanup_outputs_dir, force_kill_app
 from ui.main_window import MainWindow
 from ui.styles import GLOBAL_STYLESHEET
 
 
 def main() -> None:
+    # Register Ctrl+C (SIGINT) and SIGTERM handler to force-kill app immediately
+    signal.signal(signal.SIGINT, lambda *args: force_kill_app())
+    try:
+        signal.signal(signal.SIGTERM, lambda *args: force_kill_app())
+    except Exception:
+        pass
+
     # Clean up old generated outputs (audio, video, subtitles, etc.) to prevent disk bloat
     deleted_files = cleanup_outputs_dir()
     if deleted_files > 0:
@@ -31,6 +40,12 @@ def main() -> None:
     # Initialize Application
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    app.aboutToQuit.connect(force_kill_app)
+
+    # Wake Python interpreter periodically so SIGINT / Ctrl+C is received during Qt event loop
+    sig_timer = QTimer()
+    sig_timer.timeout.connect(lambda: None)
+    sig_timer.start(200)
 
     # Set Application Icon
     icon_file = APP_ICON_PNG if APP_ICON_PNG.exists() else APP_ICON_PATH

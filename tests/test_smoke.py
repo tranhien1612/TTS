@@ -54,6 +54,9 @@ def test_core_and_config():
     mm = ModelManager()
     assert mm.models_dir == MODELS_DIR
     assert mm.vieneu_dir.exists()
+    assert mm.nllb_dir.exists()
+    assert hasattr(mm, "is_nllb_downloaded")
+    assert hasattr(mm, "ensure_nllb_model")
 
     # Test FFmpeg binary resolution from assets/ffmpeg_bin
     from core.config import FFMPEG_BIN_DIR, get_ffmpeg_path, get_ffprobe_path
@@ -134,6 +137,8 @@ def test_ui_components_offscreen():
     app.setStyleSheet(GLOBAL_STYLESHEET)
 
     window = MainWindow()
+    assert window.is_force_exit_on_close is True, "Default is_force_exit_on_close must be True for instant exit on X"
+    window.is_force_exit_on_close = False  # Disable for test execution
     assert window.windowTitle().startswith(APP_NAME)
     assert window.stack.count() == 5, "Expected 5 views in stack router (TTS, STT, Sketch, Dubbing, Settings)"
 
@@ -348,6 +353,7 @@ def test_ui_components_offscreen():
     assert hasattr(window.settings_view, "item_vieneu")
     assert hasattr(window.settings_view, "item_omnivoice")
     assert hasattr(window.settings_view, "item_whisper")
+    assert hasattr(window.settings_view, "item_nllb")
 
     # Test SettingsView: Disable all download buttons during download task
     sv = window.settings_view

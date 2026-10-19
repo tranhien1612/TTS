@@ -4,6 +4,7 @@ Designed for reuse across views in Neu Audio Studio (Sketch Video, TTS, STT, etc
 """
 from pathlib import Path
 from typing import Optional, Union
+import threading
 
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QEvent
 from PyQt6.QtGui import QCursor, QWheelEvent, QMouseEvent
@@ -299,16 +300,18 @@ class VideoPlayer(QFrame):
             return
         self.current_video_path = path
 
-        # Probe resolution for instant exact aspect ratio
-        try:
-            from core.dubbing_service import get_video_resolution
-            res = get_video_resolution(path)
-            if res and res[1] > 0:
-                self.video_resolution = res
-                self.video_aspect_ratio = res[0] / res[1]
-                self.aspect_ratio_changed.emit(self.video_aspect_ratio)
-        except Exception:
-            pass
+        # Probe resolution asynchronously in background thread so UI never freezes
+        def _bg_probe():
+            try:
+                from core.dubbing_service import get_video_resolution
+                res = get_video_resolution(path)
+                if res and res[1] > 0:
+                    self.video_resolution = res
+                    self.video_aspect_ratio = res[0] / res[1]
+                    self.aspect_ratio_changed.emit(self.video_aspect_ratio)
+            except Exception:
+                pass
+        threading.Thread(target=_bg_probe, daemon=True).start()
 
         self.set_has_video(True)
 

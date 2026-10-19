@@ -44,18 +44,25 @@ class WaveformSeekBar(QWidget):
         ]
 
     def load_peaks_from_file(self, audio_path: Path) -> None:
-        """Extract peak amplitudes across num_bars segments from the audio file."""
+        """Extract peak amplitudes across num_bars segments quickly without loading full file into memory."""
         try:
-            data, _ = sf.read(str(audio_path))
-            if data.ndim > 1:
-                data = data[:, 0]
-            if len(data) > 0:
-                chunks = np.array_split(data, self.num_bars)
-                raw_peaks = [float(np.max(np.abs(c))) if len(c) > 0 else 0.1 for c in chunks]
-                max_p = max(raw_peaks) if max(raw_peaks) > 0 else 1.0
-                self.peaks = [max(0.18, min(1.0, p / max_p)) for p in raw_peaks]
-            else:
-                self.peaks = [0.25] * self.num_bars
+            with sf.SoundFile(str(audio_path)) as f:
+                total_frames = len(f)
+                if total_frames > 0:
+                    step = max(1, total_frames // self.num_bars)
+                    raw_peaks = []
+                    chunk_size = min(512, step)
+                    for i in range(self.num_bars):
+                        pos = min(i * step, max(0, total_frames - chunk_size))
+                        f.seek(pos)
+                        chunk = f.read(chunk_size)
+                        if chunk.ndim > 1:
+                            chunk = chunk[:, 0]
+                        raw_peaks.append(float(np.max(np.abs(chunk))) if len(chunk) > 0 else 0.1)
+                    max_p = max(raw_peaks) if max(raw_peaks) > 0 else 1.0
+                    self.peaks = [max(0.18, min(1.0, p / max_p)) for p in raw_peaks]
+                else:
+                    self.peaks = [0.25] * self.num_bars
         except Exception:
             # Fallback aesthetic wave if audio read fails
             self.peaks = [

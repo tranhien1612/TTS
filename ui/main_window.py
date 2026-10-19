@@ -40,6 +40,7 @@ class MainWindow(QMainWindow):
         self.stt_engine = STTEngine()
         self.sketch_engine = SketchEngine()
         self._init_worker: Optional[WorkerThread] = None
+        self.is_force_exit_on_close: bool = True
 
         self._setup_ui()
         self._auto_init_local_models()
@@ -210,7 +211,17 @@ class MainWindow(QMainWindow):
             self.tts_view.refresh_state()
 
     def closeEvent(self, event) -> None:
-        """Safely clean up workers and release AI engine memory upon exit."""
+        """Force kill all workers and process upon clicking X to stop immediately."""
+        try:
+            event.accept()
+        except Exception:
+            pass
+
+        if getattr(self, "is_force_exit_on_close", True):
+            self.hide()
+            from core.config import force_kill_app
+            force_kill_app()
+
         if hasattr(self, "_init_worker") and self._init_worker is not None:
             try:
                 self._init_worker.quit()

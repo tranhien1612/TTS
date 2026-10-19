@@ -25,7 +25,9 @@ from PyQt6.QtWidgets import (
     QFrame,
     QComboBox,
     QMessageBox,
+    QApplication,
 )
+import threading
 
 from core.config import (
     VIDEO_FILE_FILTER,
@@ -372,21 +374,31 @@ class VideoSubtitleView(QWidget):
             "",
             VIDEO_FILE_FILTER,
         )
-        if path:
-            self.selected_video = Path(path)
-            size_mb = self.selected_video.stat().st_size / (1024 * 1024)
-            self.video_name_label.setText(f"🎥 {self.selected_video.name} ({size_mb:.2f} MB)")
-            self.status_label_1.setText(f"Đã chọn: {self.selected_video.name}. Nhấn 'Tạo văn bản' để bắt đầu.")
+        if not path:
+            return
 
-            # Pre-probe aspect ratio so player is prepared for the video format
-            try:
-                from core.dubbing_service import get_video_resolution
-                res = get_video_resolution(self.selected_video)
-                if res and res[1] > 0:
-                    self.video_player.video_aspect_ratio = res[0] / res[1]
-                    self.video_player.video_resolution = res
-            except Exception:
-                pass
+        selected_video = Path(path)
+        self.selected_video = selected_video
+        self.video_name_label.setText(f"🎥 {selected_video.name} (Đang đọc thông tin...)")
+        self.status_label_1.setText(f"Đang mở video: {selected_video.name}...")
+
+        def _read_video_info():
+            size_mb = selected_video.stat().st_size / (1024 * 1024)
+            from core.dubbing_service import get_video_resolution
+            res = get_video_resolution(selected_video)
+            return size_mb, res
+
+        self._video_loader = WorkerThread(_read_video_info)
+        def _on_video_info_ready(info):
+            size_mb, res = info
+            self.video_name_label.setText(f"🎥 {selected_video.name} ({size_mb:.2f} MB)")
+            self.status_label_1.setText(f"Đã chọn: {selected_video.name}. Nhấn 'Tạo văn bản' để bắt đầu.")
+            if res and res[1] > 0:
+                self.video_player.video_aspect_ratio = res[0] / res[1]
+                self.video_player.video_resolution = res
+
+        self._video_loader.finished_task.connect(_on_video_info_ready)
+        self._video_loader.start()
 
     def _start_stage1_transcript(self) -> None:
         if self.worker is not None and self.worker.isRunning():
@@ -436,11 +448,19 @@ class VideoSubtitleView(QWidget):
             stt_res = self.stt_engine.transcribe(extracted_wav, beam_size=1)
             orig_text = stt_res.get("text", "")
             orig_segments = stt_res.get("segments", [])
+            if orig_segments and len(orig_segments) > 1:
+                orig_text = "\n".join(s["text"].strip() for s in orig_segments if s.get("text", "").strip())
 
             # 4. Dịch sang ngôn ngữ đích
-            self.status_label_1.setText(f"⏳ Đang dịch sang {target_name}...")
-            trans_text = translate_text(orig_text, target_lang=target_lang)
-            trans_segments = translate_segments(orig_segments, target_lang=target_lang)
+            detected_lang = stt_res.get("language", "")
+            if detected_lang and detected_lang.lower().startswith(target_lang.lower()[:2]):
+                self.status_label_1.setText(f"✓ Video đã là {target_name}, sử dụng nguyên bản phụ đề.")
+                trans_text = orig_text
+                trans_segments = [dict(s) for s in orig_segments]
+            else:
+                self.status_label_1.setText(f"⏳ Đang dịch sang {target_name}...")
+                trans_segments = translate_segments(orig_segments, target_lang=target_lang, source_lang=detected_lang or "auto") if orig_segments else []
+                trans_text = "\n".join(s["text"].strip() for s in trans_segments if s.get("text", "").strip()) if trans_segments else translate_text(orig_text, target_lang=target_lang, source_lang=detected_lang or "auto")
 
             # 5. Lưu tạm file .srt
             srt_content = format_srt(trans_segments)

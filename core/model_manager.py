@@ -11,6 +11,8 @@ from core.config import (
     MODEL_VIENEU,
     MODEL_OMNIVOICE,
     ASSETS_DIR,
+    NLLB_REPO,
+    NLLB_DIR,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,7 @@ class ModelManager:
         self.whisper_dir = self.models_dir / "whisper-large-v3-turbo"
         self.omnivoice_dir = self.models_dir / "omnivoice"
         self.sketch_dir = self.models_dir / "v181d"
+        self.nllb_dir = Path(NLLB_DIR)
 
         # Ensure directories exist
         self.models_dir.mkdir(parents=True, exist_ok=True)
@@ -85,10 +88,11 @@ class ModelManager:
         self.whisper_dir.mkdir(parents=True, exist_ok=True)
         self.omnivoice_dir.mkdir(parents=True, exist_ok=True)
         self.sketch_dir.mkdir(parents=True, exist_ok=True)
+        self.nllb_dir.mkdir(parents=True, exist_ok=True)
 
     def _clean_stale_locks(self) -> None:
         """Purge orphaned .lock and .incomplete download cache files to prevent hangs."""
-        for cache_dir in [self.vieneu_dir / ".cache", self.codec_dir / ".cache", self.omnivoice_dir / ".cache"]:
+        for cache_dir in [self.vieneu_dir / ".cache", self.codec_dir / ".cache", self.omnivoice_dir / ".cache", self.nllb_dir / ".cache"]:
             if cache_dir.exists():
                 for lock_file in cache_dir.rglob("*.lock"):
                     try:
@@ -284,4 +288,38 @@ class ModelManager:
 
         if progress_callback:
             progress_callback(100, "Đã tải xong mô hình video vẽ tay.")
+        return True
+
+    def is_nllb_downloaded(self) -> bool:
+        """Check if NLLB-200 CTranslate2 model files exist locally in models/."""
+        if not (self.nllb_dir / "model.bin").is_file():
+            return False
+        if not (self.nllb_dir / "tokenizer.json").is_file():
+            return False
+        if not (self.nllb_dir / "shared_vocabulary.txt").is_file():
+            return False
+        return True
+
+    def ensure_nllb_model(self, progress_callback: Optional[Callable[[int, str], None]] = None) -> bool:
+        """Download NLLB-200 CTranslate2 model from Hugging Face into models/."""
+        if self.is_nllb_downloaded():
+            return True
+
+        self._clean_stale_locks()
+        if progress_callback:
+            progress_callback(10, "Đang tải mô hình dịch thuật NLLB-200 (CTranslate2 INT8)...")
+
+        from huggingface_hub import snapshot_download
+        try:
+            with _temp_online_env():
+                snapshot_download(
+                    repo_id=NLLB_REPO,
+                    local_dir=str(self.nllb_dir),
+                    etag_timeout=30,
+                )
+        except Exception as e:
+            raise RuntimeError(f"Lỗi tải mô hình dịch thuật NLLB-200: {e}") from e
+
+        if progress_callback:
+            progress_callback(100, "Đã tải xong mô hình dịch thuật NLLB-200.")
         return True

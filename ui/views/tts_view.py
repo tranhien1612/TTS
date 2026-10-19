@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QSlider,
     QFrame,
     QMessageBox,
+    QApplication,
 )
 
 from core.config import (
@@ -385,12 +386,23 @@ class TTSView(QWidget):
             AUDIO_FILE_FILTER,
         )
         if path:
-            self.reference_audio_path = Path(path)
-            file_name = self.reference_audio_path.name
+            selected_path = Path(path)
+            self.reference_audio_path = selected_path
+            file_name = selected_path.name
             display_name = file_name if len(file_name) <= 22 else f"{file_name[:19]}..."
             self.clone_pill.set_content("Voice Clone", display_name)
             self.clone_pill.setChecked(True)
-            self.voice_info_label.setText(f"Nhân bản từ tệp mẫu: {self.reference_audio_path.name}")
+            self.voice_info_label.setText(f"Đang đọc tệp mẫu: {selected_path.name}...")
+
+            def _read_clone_info():
+                return selected_path.stat().st_size / (1024 * 1024)
+
+            self._clone_loader = WorkerThread(_read_clone_info)
+            def _on_clone_ready(size_mb):
+                self.voice_info_label.setText(f"Nhân bản từ tệp mẫu: {selected_path.name} ({size_mb:.2f} MB)")
+
+            self._clone_loader.finished_task.connect(_on_clone_ready)
+            self._clone_loader.start()
         else:
             if self.reference_audio_path and self.reference_audio_path.exists():
                 self.clone_pill.setChecked(True)

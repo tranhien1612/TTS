@@ -362,8 +362,12 @@ class STTView(QWidget):
         self.progress_bar.setRange(0, 0)
 
         def _do_translation():
-            tr_text = translate_text(text, target_lang=target_lang)
-            tr_segs = translate_segments(segments, target_lang=target_lang)
+            if segments:
+                tr_segs = translate_segments(segments, target_lang=target_lang)
+                tr_text = "\n".join(s["text"].strip() for s in tr_segs if s.get("text", "").strip())
+            else:
+                tr_text = translate_text(text, target_lang=target_lang)
+                tr_segs = []
             return tr_text, tr_segs
 
         self._cleanup_trans_worker()
@@ -416,11 +420,24 @@ class STTView(QWidget):
             "",
             AUDIO_FILE_FILTER,
         )
-        if path:
-            self.selected_audio = Path(path)
-            file_size_mb = self.selected_audio.stat().st_size / (1024 * 1024)
-            self.file_name_label.setText(f"📁 {self.selected_audio.name} ({file_size_mb:.2f} MB)")
-            self.status_label.setText(f"Đã chọn tệp: {self.selected_audio.name}. Bấm 'Bắt đầu nhận dạng' để chạy.")
+        if not path:
+            return
+
+        selected_audio = Path(path)
+        self.selected_audio = selected_audio
+        self.file_name_label.setText(f"📁 {selected_audio.name} (Đang đọc...)")
+        self.status_label.setText(f"Đang mở tệp: {selected_audio.name}...")
+
+        def _read_info():
+            return selected_audio.stat().st_size / (1024 * 1024)
+
+        self._file_loader = WorkerThread(_read_info)
+        def _on_info_ready(size_mb):
+            self.file_name_label.setText(f"📁 {selected_audio.name} ({size_mb:.2f} MB)")
+            self.status_label.setText(f"Đã chọn tệp: {selected_audio.name}. Bấm 'Bắt đầu nhận dạng' để chạy.")
+
+        self._file_loader.finished_task.connect(_on_info_ready)
+        self._file_loader.start()
 
     def _on_progress(self, percent: int, msg: str) -> None:
         if 0 < percent < 100:

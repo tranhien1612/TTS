@@ -98,6 +98,11 @@ WHISPER_DIR = MODELS_DIR / "whisper-large-v3-turbo"
 WHISPER_DIR.mkdir(parents=True, exist_ok=True)
 WHISPER_DEFAULT_LANGUAGE = "vi"
 
+# Translation Engine Configuration (CTranslate2 NLLB-200)
+NLLB_REPO = "JustFrederik/nllb-200-distilled-600M-ct2-int8"
+NLLB_DIR = MODELS_DIR / "nllb-200-distilled-600M-ct2-int8"
+NLLB_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def cleanup_outputs_dir() -> int:
     """Clear all old files and data from outputs/ directory on startup to prevent disk bloat.
@@ -157,6 +162,33 @@ def get_subprocess_no_window_kwargs() -> dict:
         startupinfo.wShowWindow = 0  # SW_HIDE
         kwargs["startupinfo"] = startupinfo
     return kwargs
+
+
+def force_kill_app() -> None:
+    """Force kill the application and any spawned child processes (FFmpeg, workers) immediately."""
+    try:
+        import psutil
+        parent = psutil.Process(os.getpid())
+        for child in parent.children(recursive=True):
+            try:
+                child.kill()
+            except Exception:
+                pass
+        parent.kill()
+    except Exception:
+        if sys.platform == "win32":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(os.getpid())],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+    finally:
+        os._exit(0)
+
 
 
 

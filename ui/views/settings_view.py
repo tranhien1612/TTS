@@ -188,6 +188,28 @@ class SettingsView(QWidget):
         self.card_stt.addWidget(self.item_whisper["container"])
         layout.addWidget(self.card_stt)
 
+        # ─── Card 3: Machine Translation (NLLB-200 CTranslate2) ──────────────
+        self.card_translation = Card()
+        trans_title = QLabel("3. Mô hình Dịch thuật (Machine Translation - CTranslate2)")
+        trans_title.setProperty("class", "section-title")
+        trans_title.setStyleSheet("font-size: 15px; font-weight: 600; color: #0F172A;")
+        self.card_translation.addWidget(trans_title)
+
+        trans_desc = QLabel("Mô hình AI dịch thuật ngoại tuyến đa ngôn ngữ chất lượng cao của Meta AI, chạy tăng tốc CTranslate2 INT8 trực tiếp trên máy tính.")
+        trans_desc.setProperty("class", "caption")
+        self.card_translation.addWidget(trans_desc)
+
+        self.item_nllb = self._create_model_row(
+            key="nllb",
+            name="NLLB-200 Distilled (CTranslate2 INT8)",
+            tag="Dịch thuật Offline · 200 Ngôn ngữ",
+            description="Mô hình dịch thuật 200 ngôn ngữ ngoại tuyến, không cần internet, tốc độ cao và bảo mật tuyệt đối.",
+            on_action=lambda: self._start_model_task("nllb"),
+            has_radio=False,
+        )
+        self.card_translation.addWidget(self.item_nllb["container"])
+        layout.addWidget(self.card_translation)
+
         layout.addStretch(1)
         scroll.setWidget(container)
         main_layout.addWidget(scroll)
@@ -311,6 +333,12 @@ class SettingsView(QWidget):
         whisper_loaded = self.stt_engine is not None and self.stt_engine.is_loaded
         self._update_item_ui(self.item_whisper, whisper_downloaded, whisper_loaded)
 
+        # 4. NLLB Translation
+        nllb_downloaded = self.model_manager.is_nllb_downloaded()
+        from core.translator import is_ctranslate2_loaded
+        nllb_loaded = is_ctranslate2_loaded()
+        self._update_item_ui(self.item_nllb, nllb_downloaded, nllb_loaded)
+
     def _update_item_ui(self, item: Dict[str, Any], is_downloaded: bool, is_loaded: bool) -> None:
         badge: QLabel = item["status_badge"]
         btn: QPushButton = item["action_btn"]
@@ -400,6 +428,12 @@ class SettingsView(QWidget):
                     self.stt_engine.load_model(progress_callback)
                 else:
                     self.model_manager.ensure_whisper_model(progress_callback)
+            elif target == "nllb":
+                self.model_manager.ensure_nllb_model(progress_callback)
+                if progress_callback:
+                    progress_callback(95, "Đang khởi tạo bộ máy dịch thuật CTranslate2...")
+                from core.translator import get_ctranslate2_translator
+                get_ctranslate2_translator().load()
             return target
 
         self._cleanup_worker()
